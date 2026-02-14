@@ -11,8 +11,10 @@ const App = () => {
   const localPlayerId = useRef(null);
   const sceneRef = useRef(null);
   const [isMobile, setIsMobile] = useState(false);
-  const [joystick, setJoystick] = useState({ active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null });
+  const [moveJoystick, setMoveJoystick] = useState({ active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null });
+  const [fireJoystick, setFireJoystick] = useState({ active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null });
   const [health, setHealth] = useState(100);
+  const lastFireTime = useRef(0);
 
   useEffect(() => {
     // Check if mobile
@@ -272,21 +274,21 @@ const App = () => {
         const speed = 4;
         const rotationSpeed = 0.04;
 
-        if (keys['KeyW'] || keys['w'] || (joystick.active && joystick.y < -10)) {
+        if (keys['KeyW'] || keys['w'] || (moveJoystick.active && moveJoystick.y < -10)) {
           localPlayer.mesh.position.x += Math.cos(localPlayer.mesh.rotation.z) * speed;
           localPlayer.mesh.position.y += Math.sin(localPlayer.mesh.rotation.z) * speed;
           moved = true;
         }
-        if (keys['KeyS'] || keys['s'] || (joystick.active && joystick.y > 10)) {
+        if (keys['KeyS'] || keys['s'] || (moveJoystick.active && moveJoystick.y > 10)) {
           localPlayer.mesh.position.x -= Math.cos(localPlayer.mesh.rotation.z) * speed;
           localPlayer.mesh.position.y -= Math.sin(localPlayer.mesh.rotation.z) * speed;
           moved = true;
         }
-        if (keys['KeyA'] || keys['a'] || (joystick.active && joystick.x < -10)) {
+        if (keys['KeyA'] || keys['a'] || (moveJoystick.active && moveJoystick.x < -10)) {
           localPlayer.mesh.rotation.z += rotationSpeed;
           moved = true;
         }
-        if (keys['KeyD'] || keys['d'] || (joystick.active && joystick.x > 10)) {
+        if (keys['KeyD'] || keys['d'] || (moveJoystick.active && moveJoystick.x > 10)) {
           localPlayer.mesh.rotation.z -= rotationSpeed;
           moved = true;
         }
@@ -298,13 +300,24 @@ const App = () => {
           vector.unproject(camera);
           const targetAngle = Math.atan2(vector.y - localPlayer.mesh.position.y, vector.x - localPlayer.mesh.position.x);
           localPlayer.turret.rotation.z = targetAngle - localPlayer.mesh.rotation.z;
-        } else if (joystick.active) {
-          // In mobile, turret follows movement direction if joystick is active
-          const targetAngle = Math.atan2(-joystick.y, joystick.x);
+        } else if (fireJoystick.active) {
+          // Turret follows fire joystick direction
+          const targetAngle = Math.atan2(-fireJoystick.y, fireJoystick.x);
+          localPlayer.turret.rotation.z = targetAngle - localPlayer.mesh.rotation.z;
+          
+          // Auto fire while aiming with fire joystick
+          const now = Date.now();
+          if (now - lastFireTime.current > 300) {
+            handleFire();
+            lastFireTime.current = now;
+          }
+        } else if (moveJoystick.active) {
+          // Turret follows movement if not firing
+          const targetAngle = Math.atan2(-moveJoystick.y, moveJoystick.x);
           localPlayer.turret.rotation.z = targetAngle - localPlayer.mesh.rotation.z;
         }
 
-        if (moved || (isMobile && joystick.active)) {
+        if (moved || (isMobile && (moveJoystick.active || fireJoystick.active))) {
           socket.emit('playerMovement', {
             x: localPlayer.mesh.position.x,
             y: localPlayer.mesh.position.y,
@@ -399,57 +412,60 @@ const App = () => {
     }
   };
 
-  const handleJoystickStart = (e) => {
+  const handleJoystickStart = (e, type) => {
     e.preventDefault();
     const touch = e.changedTouches[0];
-    setJoystick({ 
+    const data = { 
       active: true, 
       x: 0, 
       y: 0, 
       startX: touch.clientX, 
       startY: touch.clientY,
       touchId: touch.identifier 
-    });
+    };
+    if (type === 'move') setMoveJoystick(data);
+    else setFireJoystick(data);
   };
 
   const handleJoystickMove = (e) => {
-    if (!joystick.active) return;
-    
-    // Find the specific touch that started the joystick
-    let touch = null;
-    for (let i = 0; i < e.touches.length; i++) {
-      if (e.touches[i].identifier === joystick.touchId) {
-        touch = e.touches[i];
-        break;
+    // Check both joysticks
+    [ { state: moveJoystick, setter: setMoveJoystick }, 
+      { state: fireJoystick, setter: setFireJoystick }
+    ].forEach(({ state, setter }) => {
+      if (!state.active) return;
+      
+      let touch = null;
+      for (let i = 0; i < e.touches.length; i++) {
+        if (e.touches[i].identifier === state.touchId) {
+          touch = e.touches[i];
+          break;
+        }
       }
-    }
-    
-    if (!touch) return;
+      
+      if (!touch) return;
 
-    const dx = touch.clientX - joystick.startX;
-    const dy = touch.clientY - joystick.startY;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    const maxDist = 50;
-    
-    if (dist > 0) {
-      const limitedX = (dx / dist) * Math.min(dist, maxDist);
-      const limitedY = (dy / dist) * Math.min(dist, maxDist);
-      setJoystick(prev => ({ ...prev, x: limitedX, y: limitedY }));
-    }
+      const dx = touch.clientX - state.startX;
+      const dy = touch.clientY - state.startY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const maxDist = 50;
+      
+      if (dist > 0) {
+        const limitedX = (dx / dist) * Math.min(dist, maxDist);
+        const limitedY = (dy / dist) * Math.min(dist, maxDist);
+        setter(prev => ({ ...prev, x: limitedX, y: limitedY }));
+      }
+    });
   };
 
   const handleJoystickEnd = (e) => {
-    // Check if the touch that ended was the joystick touch
-    let ended = false;
     for (let i = 0; i < e.changedTouches.length; i++) {
-      if (e.changedTouches[i].identifier === joystick.touchId) {
-        ended = true;
-        break;
+      const tid = e.changedTouches[i].identifier;
+      if (moveJoystick.touchId === tid) {
+        setMoveJoystick({ active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null });
       }
-    }
-    
-    if (ended) {
-      setJoystick({ active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null });
+      if (fireJoystick.touchId === tid) {
+        setFireJoystick({ active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null });
+      }
     }
   };
 
@@ -490,9 +506,9 @@ const App = () => {
       {/* Mobile Controls */}
       {isMobile && (
         <>
-          {/* Joystick */}
+          {/* Movement Joystick */}
           <div 
-            onTouchStart={handleJoystickStart}
+            onTouchStart={(e) => handleJoystickStart(e, 'move')}
             style={{
               position: 'absolute',
               bottom: 50,
@@ -501,14 +517,15 @@ const App = () => {
               height: 100,
               background: 'rgba(255,255,255,0.1)',
               borderRadius: '50%',
-              border: '2px solid rgba(255,255,255,0.3)'
+              border: '2px solid rgba(255,255,255,0.3)',
+              touchAction: 'none'
             }}
           >
-            {joystick.active && (
+            {moveJoystick.active && (
               <div style={{
                 position: 'absolute',
-                left: 50 + joystick.x - 20,
-                top: 50 + joystick.y - 20,
+                left: 50 + moveJoystick.x - 20,
+                top: 50 + moveJoystick.y - 20,
                 width: 40,
                 height: 40,
                 background: 'rgba(255,255,255,0.5)',
@@ -517,30 +534,32 @@ const App = () => {
             )}
           </div>
 
-          {/* Fire Button */}
+          {/* Fire/Aim Joystick */}
           <div 
-            onTouchStart={handleFire}
+            onTouchStart={(e) => handleJoystickStart(e, 'fire')}
             style={{
               position: 'absolute',
-              bottom: 70,
+              bottom: 50,
               right: 50,
-              width: '80px',
-              height: '80px',
-              backgroundColor: 'rgba(255, 0, 0, 0.5)',
+              width: 100,
+              height: 100,
+              background: 'rgba(255, 0, 0, 0.1)',
               borderRadius: '50%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'white',
-              fontWeight: 'bold',
-              fontSize: '18px',
-              border: '4px solid rgba(255,255,255,0.3)',
-              userSelect: 'none',
-              WebkitUserSelect: 'none',
+              border: '2px solid rgba(255, 0, 0, 0.3)',
               touchAction: 'none'
             }}
           >
-            FIRE
+            {fireJoystick.active && (
+              <div style={{
+                position: 'absolute',
+                left: 50 + fireJoystick.x - 20,
+                top: 50 + fireJoystick.y - 20,
+                width: 40,
+                height: 40,
+                background: 'rgba(255, 0, 0, 0.5)',
+                borderRadius: '50%'
+              }} />
+            )}
           </div>
         </>
       )}
