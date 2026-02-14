@@ -6,11 +6,17 @@ const App = () => {
   const mountRef = useRef(null);
   const socketRef = useRef(null);
   const playersRef = useRef({});
+  const obstaclesRef = useRef({});
   const bulletsRef = useRef([]);
   const localPlayerId = useRef(null);
   const sceneRef = useRef(null);
+  const [isMobile, setIsMobile] = useState(false);
+  const [joystick, setJoystick] = useState({ active: false, x: 0, y: 0, startX: 0, startY: 0 });
+  const [health, setHealth] = useState(100);
 
   useEffect(() => {
+    // Check if mobile
+    setIsMobile('ontouchstart' in window || navigator.maxTouchPoints > 0);
     // Scene setup
     const scene = new THREE.Scene();
     sceneRef.current = scene;
@@ -83,6 +89,65 @@ const App = () => {
     socket.on('bulletFired', (bulletData) => {
       createBullet(bulletData);
     });
+
+    socket.on('currentObstacles', (obstacles) => {
+      Object.keys(obstacles).forEach((id) => {
+        addObstacle(id, obstacles[id]);
+      });
+    });
+
+    socket.on('newObstacle', (obstacle) => {
+      addObstacle(obstacle.id, obstacle);
+    });
+
+    socket.on('obstacleHit', (data) => {
+      if (obstaclesRef.current[data.id]) {
+        obstaclesRef.current[data.id].health = data.health;
+        // Visual feedback
+        obstaclesRef.current[data.id].mesh.material.color.set(0xff0000);
+        setTimeout(() => {
+          if (obstaclesRef.current[data.id]) {
+            obstaclesRef.current[data.id].mesh.material.color.set(0x888888);
+          }
+        }, 100);
+      }
+    });
+
+    socket.on('obstacleDestroyed', (id) => {
+      if (obstaclesRef.current[id]) {
+        scene.remove(obstaclesRef.current[id].mesh);
+        delete obstaclesRef.current[id];
+      }
+    });
+
+    socket.on('playerHit', (data) => {
+      if (data.id === localPlayerId.current) {
+        setHealth(data.health);
+      }
+      if (playersRef.current[data.id]) {
+        playersRef.current[data.id].health = data.health;
+      }
+    });
+
+    socket.on('playerRespawn', (playerInfo) => {
+      if (playerInfo.id === localPlayerId.current) {
+        setHealth(100);
+      }
+      if (playersRef.current[playerInfo.id]) {
+        playersRef.current[playerInfo.id].mesh.position.set(playerInfo.x, playerInfo.y, 0);
+        playersRef.current[playerInfo.id].health = 100;
+      }
+    });
+
+    const addObstacle = (id, info) => {
+      if (obstaclesRef.current[id]) return;
+      const geometry = new THREE.BoxGeometry(50, 50, 50);
+      const material = new THREE.MeshBasicMaterial({ color: 0x888888 });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(info.x, info.y, 25);
+      scene.add(mesh);
+      obstaclesRef.current[id] = { ...info, mesh };
+    };
 
     const addPlayer = (id, info) => {
       if (playersRef.current[id]) return; // Avoid duplicates
@@ -197,21 +262,21 @@ const App = () => {
         const speed = 4;
         const rotationSpeed = 0.04;
 
-        if (keys['KeyW'] || keys['w']) {
+        if (keys['KeyW'] || keys['w'] || (joystick.active && joystick.y < -10)) {
           localPlayer.mesh.position.x += Math.cos(localPlayer.mesh.rotation.z) * speed;
           localPlayer.mesh.position.y += Math.sin(localPlayer.mesh.rotation.z) * speed;
           moved = true;
         }
-        if (keys['KeyS'] || keys['s']) {
+        if (keys['KeyS'] || keys['s'] || (joystick.active && joystick.y > 10)) {
           localPlayer.mesh.position.x -= Math.cos(localPlayer.mesh.rotation.z) * speed;
           localPlayer.mesh.position.y -= Math.sin(localPlayer.mesh.rotation.z) * speed;
           moved = true;
         }
-        if (keys['KeyA'] || keys['a']) {
+        if (keys['KeyA'] || keys['a'] || (joystick.active && joystick.x < -10)) {
           localPlayer.mesh.rotation.z += rotationSpeed;
           moved = true;
         }
-        if (keys['KeyD'] || keys['d']) {
+        if (keys['KeyD'] || keys['d'] || (joystick.active && joystick.x > 10)) {
           localPlayer.mesh.rotation.z -= rotationSpeed;
           moved = true;
         }
@@ -249,15 +314,24 @@ const App = () => {
 
         // Check collisions with other players
         Object.keys(playersRef.current).forEach((id) => {
-          if (id === localPlayerId.current) return; // Don't hit yourself
+          if (id === localPlayerId.current) return;
           
           const player = playersRef.current[id];
           const dist = bullet.mesh.position.distanceTo(player.mesh.position);
           
-          if (dist < 25) { // Collision radius
-            bullet.life = 0; // Destroy bullet
-            // In a real game, emit hit event to server
-            console.log('Hit player:', id);
+          if (dist < 25) {
+            bullet.life = 0;
+            socket.emit('bulletHit', { targetId: id, type: 'player', damage: 10 });
+          }
+        });
+
+        // Check collisions with obstacles
+        Object.keys(obstaclesRef.current).forEach((id) => {
+          const obs = obstaclesRef.current[id];
+          const dist = bullet.mesh.position.distanceTo(obs.mesh.position);
+          if (dist < 35) {
+            bullet.life = 0;
+            socket.emit('bulletHit', { targetId: id, type: 'obstacle', damage: 10 });
           }
         });
 
@@ -294,9 +368,50 @@ const App = () => {
     };
   }, []);
 
+  const handleFire = () => {
+    const localPlayer = playersRef.current[localPlayerId.current];
+    if (localPlayer) {
+      const angle = localPlayer.mesh.rotation.z + localPlayer.turret.rotation.z;
+      const bulletData = {
+        x: localPlayer.mesh.position.x + Math.cos(angle) * 40,
+        y: localPlayer.mesh.position.y + Math.sin(angle) * 40,
+        angle: angle
+      };
+      createBullet(bulletData);
+      socketRef.current.emit('fire', bulletData);
+    }
+  };
+
+  const handleJoystickStart = (e) => {
+    const touch = e.touches[0];
+    setJoystick({ active: true, x: 0, y: 0, startX: touch.clientX, startY: touch.clientY });
+  };
+
+  const handleJoystickMove = (e) => {
+    if (!joystick.active) return;
+    const touch = e.touches[0];
+    const dx = touch.clientX - joystick.startX;
+    const dy = touch.clientY - joystick.startY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const maxDist = 50;
+    const limitedX = (dx / dist) * Math.min(dist, maxDist);
+    const limitedY = (dy / dist) * Math.min(dist, maxDist);
+    setJoystick(prev => ({ ...prev, x: limitedX, y: limitedY }));
+  };
+
+  const handleJoystickEnd = () => {
+    setJoystick({ active: false, x: 0, y: 0, startX: 0, startY: 0 });
+  };
+
   return (
-    <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
+    <div 
+      style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden', touchAction: 'none' }}
+      onTouchMove={handleJoystickMove}
+      onTouchEnd={handleJoystickEnd}
+    >
       <div ref={mountRef} style={{ width: '100vw', height: '100vh' }} />
+      
+      {/* UI Overlay */}
       <div style={{
         position: 'absolute',
         top: 20,
@@ -308,11 +423,73 @@ const App = () => {
         padding: '10px',
         borderRadius: '5px'
       }}>
-        <h2 style={{ margin: '0 0 10px 0' }}>Tanki.io</h2>
-        <p>Управление: WASD</p>
-        <p>Стрельба: ЛКМ</p>
-        <p>Целиться: Мышь</p>
+        <h2 style={{ margin: '0 0 5px 0' }}>Tanki.io</h2>
+        <div style={{ width: '200px', height: '20px', background: '#333', borderRadius: '10px', overflow: 'hidden' }}>
+          <div style={{ width: `${health}%`, height: '100%', background: '#ff3333', transition: 'width 0.2s' }} />
+        </div>
+        <p style={{ margin: '5px 0' }}>Здоровье: {health}%</p>
+        {!isMobile && (
+          <div style={{ fontSize: '12px', opacity: 0.8 }}>
+            <p>Управление: WASD</p>
+            <p>Стрельба: ЛКМ</p>
+          </div>
+        )}
       </div>
+
+      {/* Mobile Controls */}
+      {isMobile && (
+        <>
+          {/* Joystick */}
+          <div 
+            onTouchStart={handleJoystickStart}
+            style={{
+              position: 'absolute',
+              bottom: 50,
+              left: 50,
+              width: 100,
+              height: 100,
+              background: 'rgba(255,255,255,0.1)',
+              borderRadius: '50%',
+              border: '2px solid rgba(255,255,255,0.3)'
+            }}
+          >
+            {joystick.active && (
+              <div style={{
+                position: 'absolute',
+                left: 50 + joystick.x - 20,
+                top: 50 + joystick.y - 20,
+                width: 40,
+                height: 40,
+                background: 'rgba(255,255,255,0.5)',
+                borderRadius: '50%'
+              }} />
+            )}
+          </div>
+
+          {/* Fire Button */}
+          <div 
+            onTouchStart={(e) => { e.preventDefault(); handleFire(); }}
+            style={{
+              position: 'absolute',
+              bottom: 70,
+              right: 50,
+              width: 80,
+              height: 80,
+              background: 'rgba(255,50,50,0.5)',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'white',
+              fontWeight: 'bold',
+              fontSize: '18px',
+              border: '4px solid rgba(255,255,255,0.3)'
+            }}
+          >
+            FIRE
+          </div>
+        </>
+      )}
     </div>
   );
 };
