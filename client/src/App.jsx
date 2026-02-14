@@ -11,7 +11,7 @@ const App = () => {
   const localPlayerId = useRef(null);
   const sceneRef = useRef(null);
   const [isMobile, setIsMobile] = useState(false);
-  const [joystick, setJoystick] = useState({ active: false, x: 0, y: 0, startX: 0, startY: 0 });
+  const [joystick, setJoystick] = useState({ active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null });
   const [health, setHealth] = useState(100);
 
   useEffect(() => {
@@ -102,12 +102,18 @@ const App = () => {
 
     socket.on('obstacleHit', (data) => {
       if (obstaclesRef.current[data.id]) {
-        obstaclesRef.current[data.id].health = data.health;
+        const obs = obstaclesRef.current[data.id];
+        obs.health = data.health;
+        
+        // Clear existing timeout if any
+        if (obs.hitTimeout) clearTimeout(obs.hitTimeout);
+        
         // Visual feedback
-        obstaclesRef.current[data.id].mesh.material.color.set(0xff0000);
-        setTimeout(() => {
+        obs.mesh.material.color.set(0xff0000);
+        obs.hitTimeout = setTimeout(() => {
           if (obstaclesRef.current[data.id]) {
             obstaclesRef.current[data.id].mesh.material.color.set(0x888888);
+            obstaclesRef.current[data.id].hitTimeout = null;
           }
         }, 100);
       }
@@ -115,6 +121,9 @@ const App = () => {
 
     socket.on('obstacleDestroyed', (id) => {
       if (obstaclesRef.current[id]) {
+        if (obstaclesRef.current[id].hitTimeout) {
+          clearTimeout(obstaclesRef.current[id].hitTimeout);
+        }
         scene.remove(obstaclesRef.current[id].mesh);
         delete obstaclesRef.current[id];
       }
@@ -383,24 +392,57 @@ const App = () => {
   };
 
   const handleJoystickStart = (e) => {
-    const touch = e.touches[0];
-    setJoystick({ active: true, x: 0, y: 0, startX: touch.clientX, startY: touch.clientY });
+    e.preventDefault();
+    const touch = e.changedTouches[0];
+    setJoystick({ 
+      active: true, 
+      x: 0, 
+      y: 0, 
+      startX: touch.clientX, 
+      startY: touch.clientY,
+      touchId: touch.identifier 
+    });
   };
 
   const handleJoystickMove = (e) => {
     if (!joystick.active) return;
-    const touch = e.touches[0];
+    
+    // Find the specific touch that started the joystick
+    let touch = null;
+    for (let i = 0; i < e.touches.length; i++) {
+      if (e.touches[i].identifier === joystick.touchId) {
+        touch = e.touches[i];
+        break;
+      }
+    }
+    
+    if (!touch) return;
+
     const dx = touch.clientX - joystick.startX;
     const dy = touch.clientY - joystick.startY;
     const dist = Math.sqrt(dx * dx + dy * dy);
     const maxDist = 50;
-    const limitedX = (dx / dist) * Math.min(dist, maxDist);
-    const limitedY = (dy / dist) * Math.min(dist, maxDist);
-    setJoystick(prev => ({ ...prev, x: limitedX, y: limitedY }));
+    
+    if (dist > 0) {
+      const limitedX = (dx / dist) * Math.min(dist, maxDist);
+      const limitedY = (dy / dist) * Math.min(dist, maxDist);
+      setJoystick(prev => ({ ...prev, x: limitedX, y: limitedY }));
+    }
   };
 
-  const handleJoystickEnd = () => {
-    setJoystick({ active: false, x: 0, y: 0, startX: 0, startY: 0 });
+  const handleJoystickEnd = (e) => {
+    // Check if the touch that ended was the joystick touch
+    let ended = false;
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === joystick.touchId) {
+        ended = true;
+        break;
+      }
+    }
+    
+    if (ended) {
+      setJoystick({ active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null });
+    }
   };
 
   return (
@@ -408,6 +450,7 @@ const App = () => {
       style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden', touchAction: 'none' }}
       onTouchMove={handleJoystickMove}
       onTouchEnd={handleJoystickEnd}
+      onTouchCancel={handleJoystickEnd}
     >
       <div ref={mountRef} style={{ width: '100vw', height: '100vh' }} />
       
