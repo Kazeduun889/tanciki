@@ -257,8 +257,9 @@ const App = () => {
     window.addEventListener('mousedown', handleMouseDown);
 
     // Animation loop
+    let animationFrameId;
     const animate = () => {
-      requestAnimationFrame(animate);
+      animationFrameId = requestAnimationFrame(animate);
 
       // Local movement
       const localPlayer = playersRef.current[localPlayerId.current];
@@ -290,18 +291,20 @@ const App = () => {
           moved = true;
         }
 
-        // Turret rotation towards mouse
-        const vector = new THREE.Vector3(mouse.x, mouse.y, 0.5);
-        vector.unproject(camera);
-        
-        // Calculate direction from player to mouse in world space
-        const targetAngle = Math.atan2(vector.y - localPlayer.mesh.position.y, vector.x - localPlayer.mesh.position.x);
-        
-        // Set turret rotation relative to tank body
-        localPlayer.turret.rotation.z = targetAngle - localPlayer.mesh.rotation.z;
-        moved = true; 
+        // Turret rotation
+        if (!isMobile) {
+          // Turret rotation towards mouse
+          const vector = new THREE.Vector3(mouse.x, mouse.y, 0.5);
+          vector.unproject(camera);
+          const targetAngle = Math.atan2(vector.y - localPlayer.mesh.position.y, vector.x - localPlayer.mesh.position.x);
+          localPlayer.turret.rotation.z = targetAngle - localPlayer.mesh.rotation.z;
+        } else if (joystick.active) {
+          // In mobile, turret follows movement direction if joystick is active
+          const targetAngle = Math.atan2(-joystick.y, joystick.x);
+          localPlayer.turret.rotation.z = targetAngle - localPlayer.mesh.rotation.z;
+        }
 
-        if (moved) {
+        if (moved || (isMobile && joystick.active)) {
           socket.emit('playerMovement', {
             x: localPlayer.mesh.position.x,
             y: localPlayer.mesh.position.y,
@@ -367,6 +370,7 @@ const App = () => {
     window.addEventListener('resize', handleResize);
 
     return () => {
+      cancelAnimationFrame(animationFrameId);
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mousemove', handleMouseMove);
@@ -377,7 +381,11 @@ const App = () => {
     };
   }, []);
 
-  const handleFire = () => {
+  const handleFire = (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     const localPlayer = playersRef.current[localPlayerId.current];
     if (localPlayer) {
       const angle = localPlayer.mesh.rotation.z + localPlayer.turret.rotation.z;
@@ -511,14 +519,14 @@ const App = () => {
 
           {/* Fire Button */}
           <div 
-            onTouchStart={(e) => { e.preventDefault(); handleFire(); }}
+            onTouchStart={handleFire}
             style={{
               position: 'absolute',
               bottom: 70,
               right: 50,
-              width: 80,
-              height: 80,
-              background: 'rgba(255,50,50,0.5)',
+              width: '80px',
+              height: '80px',
+              backgroundColor: 'rgba(255, 0, 0, 0.5)',
               borderRadius: '50%',
               display: 'flex',
               alignItems: 'center',
@@ -526,7 +534,10 @@ const App = () => {
               color: 'white',
               fontWeight: 'bold',
               fontSize: '18px',
-              border: '4px solid rgba(255,255,255,0.3)'
+              border: '4px solid rgba(255,255,255,0.3)',
+              userSelect: 'none',
+              WebkitUserSelect: 'none',
+              touchAction: 'none'
             }}
           >
             FIRE
