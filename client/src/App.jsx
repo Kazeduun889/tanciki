@@ -307,7 +307,7 @@ const App = () => {
           
           // Auto fire while aiming with fire joystick
           const now = Date.now();
-          if (now - lastFireTime.current > 300) {
+          if (now - lastFireTime.current >= 300) {
             handleFire();
             lastFireTime.current = now;
           }
