@@ -429,18 +429,15 @@ const App = () => {
     };
   }, []);
 
-  const handleFire = (e) => {
-    if (e) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
+  const handleFire = () => {
     const localPlayer = playersRef.current[localPlayerId.current];
     if (localPlayer) {
       const angle = localPlayer.mesh.rotation.z + localPlayer.turret.rotation.z;
       const bulletData = {
         x: localPlayer.mesh.position.x + Math.cos(angle) * 40,
         y: localPlayer.mesh.position.y + Math.sin(angle) * 40,
-        angle: angle
+        angle: angle,
+        shooterId: localPlayerId.current
       };
       createBullet(bulletData);
       socketRef.current.emit('fire', bulletData);
@@ -451,12 +448,16 @@ const App = () => {
     e.preventDefault();
     e.stopPropagation();
     const touch = e.changedTouches[0];
+    const rect = e.currentTarget.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+
     const data = { 
       active: true, 
       x: 0, 
       y: 0, 
-      startX: touch.clientX, 
-      startY: touch.clientY,
+      startX: centerX, 
+      startY: centerY,
       touchId: touch.identifier 
     };
     
@@ -604,27 +605,31 @@ const App = () => {
           {/* Movement Joystick */}
           <div 
             onTouchStart={(e) => handleJoystickStart(e, 'move')}
+            onTouchMove={handleJoystickMove}
+            onTouchEnd={handleJoystickEnd}
             style={{
               position: 'absolute',
               bottom: 50,
               left: 50,
-              width: 100,
-              height: 100,
+              width: 120,
+              height: 120,
               background: 'rgba(255,255,255,0.1)',
               borderRadius: '50%',
               border: '2px solid rgba(255,255,255,0.3)',
-              touchAction: 'none'
+              touchAction: 'none',
+              zIndex: 1000
             }}
           >
             {moveJoystick.active && (
               <div style={{
                 position: 'absolute',
-                left: 50 + moveJoystick.x - 20,
-                top: 50 + moveJoystick.y - 20,
-                width: 40,
-                height: 40,
+                left: 60 + moveJoystick.x - 25,
+                top: 60 + moveJoystick.y - 25,
+                width: 50,
+                height: 50,
                 background: 'rgba(255,255,255,0.5)',
-                borderRadius: '50%'
+                borderRadius: '50%',
+                pointerEvents: 'none'
               }} />
             )}
           </div>
@@ -632,27 +637,31 @@ const App = () => {
           {/* Fire/Aim Joystick */}
           <div 
             onTouchStart={(e) => handleJoystickStart(e, 'fire')}
+            onTouchMove={handleJoystickMove}
+            onTouchEnd={handleJoystickEnd}
             style={{
               position: 'absolute',
               bottom: 50,
               right: 50,
-              width: 100,
-              height: 100,
+              width: 120,
+              height: 120,
               background: 'rgba(255, 0, 0, 0.1)',
               borderRadius: '50%',
               border: '2px solid rgba(255, 0, 0, 0.3)',
-              touchAction: 'none'
+              touchAction: 'none',
+              zIndex: 1000
             }}
           >
             {fireJoystick.active && (
               <div style={{
                 position: 'absolute',
-                left: 50 + fireJoystick.x - 20,
-                top: 50 + fireJoystick.y - 20,
-                width: 40,
-                height: 40,
+                left: 60 + fireJoystick.x - 25,
+                top: 60 + fireJoystick.y - 25,
+                width: 50,
+                height: 50,
                 background: 'rgba(255, 0, 0, 0.5)',
-                borderRadius: '50%'
+                borderRadius: '50%',
+                pointerEvents: 'none'
               }} />
             )}
           </div>
