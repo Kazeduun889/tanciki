@@ -11,14 +11,23 @@ const App = () => {
   const localPlayerId = useRef(null);
   const sceneRef = useRef(null);
   const [isMobile, setIsMobile] = useState(false);
-  const [moveJoystick, setMoveJoystick] = useState({ active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null });
-  const [fireJoystick, setFireJoystick] = useState({ active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null });
+  const [moveJoystick, setMoveJoystick] = useState({ active: false, x: 0, y: 0 });
+  const [fireJoystick, setFireJoystick] = useState({ active: false, x: 0, y: 0 });
+  const moveJoystickRef = useRef({ active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null });
+  const fireJoystickRef = useRef({ active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null });
   const [health, setHealth] = useState(100);
+  const [level, setLevel] = useState(1);
+  const [xp, setXp] = useState(0);
   const lastFireTime = useRef(0);
 
   useEffect(() => {
-    // Check if mobile
-    setIsMobile('ontouchstart' in window || navigator.maxTouchPoints > 0);
+    // Check if mobile (more robust check)
+    const checkMobile = () => {
+      return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+             ('ontouchstart' in window) || 
+             (navigator.maxTouchPoints > 0);
+    };
+    setIsMobile(checkMobile());
     // Scene setup
     const scene = new THREE.Scene();
     sceneRef.current = scene;
@@ -140,6 +149,21 @@ const App = () => {
       }
     });
 
+    socket.on('playerXPUpdate', (data) => {
+      if (data.id === localPlayerId.current) {
+        setXp(data.xp);
+      }
+    });
+
+    socket.on('playerLevelUp', (data) => {
+      if (data.id === localPlayerId.current) {
+        setLevel(data.level);
+        setHealth(100);
+        // Show level up message
+        console.log("LEVEL UP! Level: " + data.level);
+      }
+    });
+
     socket.on('playerRespawn', (playerInfo) => {
       if (playerInfo.id === localPlayerId.current) {
         setHealth(100);
@@ -213,7 +237,12 @@ const App = () => {
       );
       
       scene.add(bullet);
-      bulletsRef.current.push({ mesh: bullet, velocity, life: 100 });
+      bulletsRef.current.push({ 
+        mesh: bullet, 
+        velocity, 
+        life: 100, 
+        shooterId: data.shooterId 
+      });
     };
 
     // Input handling
@@ -250,7 +279,8 @@ const App = () => {
         const bulletData = {
           x: localPlayer.mesh.position.x + Math.cos(angle) * 40,
           y: localPlayer.mesh.position.y + Math.sin(angle) * 40,
-          angle: angle
+          angle: angle,
+          shooterId: socket.id
         };
         createBullet(bulletData);
         socket.emit('fire', bulletData);
@@ -274,21 +304,21 @@ const App = () => {
         const speed = 4;
         const rotationSpeed = 0.04;
 
-        if (keys['KeyW'] || keys['w'] || (moveJoystick.active && moveJoystick.y < -10)) {
+        if (keys['KeyW'] || keys['w'] || (moveJoystickRef.current.active && moveJoystickRef.current.y < -10)) {
           localPlayer.mesh.position.x += Math.cos(localPlayer.mesh.rotation.z) * speed;
           localPlayer.mesh.position.y += Math.sin(localPlayer.mesh.rotation.z) * speed;
           moved = true;
         }
-        if (keys['KeyS'] || keys['s'] || (moveJoystick.active && moveJoystick.y > 10)) {
+        if (keys['KeyS'] || keys['s'] || (moveJoystickRef.current.active && moveJoystickRef.current.y > 10)) {
           localPlayer.mesh.position.x -= Math.cos(localPlayer.mesh.rotation.z) * speed;
           localPlayer.mesh.position.y -= Math.sin(localPlayer.mesh.rotation.z) * speed;
           moved = true;
         }
-        if (keys['KeyA'] || keys['a'] || (moveJoystick.active && moveJoystick.x < -10)) {
+        if (keys['KeyA'] || keys['a'] || (moveJoystickRef.current.active && moveJoystickRef.current.x < -10)) {
           localPlayer.mesh.rotation.z += rotationSpeed;
           moved = true;
         }
-        if (keys['KeyD'] || keys['d'] || (moveJoystick.active && moveJoystick.x > 10)) {
+        if (keys['KeyD'] || keys['d'] || (moveJoystickRef.current.active && moveJoystickRef.current.x > 10)) {
           localPlayer.mesh.rotation.z -= rotationSpeed;
           moved = true;
         }
@@ -300,13 +330,13 @@ const App = () => {
           vector.unproject(camera);
           const targetAngle = Math.atan2(vector.y - localPlayer.mesh.position.y, vector.x - localPlayer.mesh.position.x);
           localPlayer.turret.rotation.z = targetAngle - localPlayer.mesh.rotation.z;
-        } else if (fireJoystick.active) {
+        } else if (fireJoystickRef.current.active) {
           // Turret follows fire joystick direction
-          const targetAngle = Math.atan2(-fireJoystick.y, fireJoystick.x);
+          const targetAngle = Math.atan2(-fireJoystickRef.current.y, fireJoystickRef.current.x);
           localPlayer.turret.rotation.z = targetAngle - localPlayer.mesh.rotation.z;
           
           // Auto fire only if joystick is tilted enough
-          const dist = Math.sqrt(fireJoystick.x * fireJoystick.x + fireJoystick.y * fireJoystick.y);
+          const dist = Math.sqrt(fireJoystickRef.current.x * fireJoystickRef.current.x + fireJoystickRef.current.y * fireJoystickRef.current.y);
           if (dist > 20) {
             const now = Date.now();
             if (now - lastFireTime.current >= 300) {
@@ -314,13 +344,13 @@ const App = () => {
               lastFireTime.current = now;
             }
           }
-        } else if (moveJoystick.active) {
+        } else if (moveJoystickRef.current.active) {
           // Turret follows movement if not firing
-          const targetAngle = Math.atan2(-moveJoystick.y, moveJoystick.x);
+          const targetAngle = Math.atan2(-moveJoystickRef.current.y, moveJoystickRef.current.x);
           localPlayer.turret.rotation.z = targetAngle - localPlayer.mesh.rotation.z;
         }
 
-        if (moved || (isMobile && (moveJoystick.active || fireJoystick.active))) {
+        if (moved || (isMobile && (moveJoystickRef.current.active || fireJoystickRef.current.active))) {
           socket.emit('playerMovement', {
             x: localPlayer.mesh.position.x,
             y: localPlayer.mesh.position.y,
@@ -342,14 +372,15 @@ const App = () => {
 
         // Check collisions with other players
         Object.keys(playersRef.current).forEach((id) => {
-          if (id === localPlayerId.current) return;
+          if (id === bullet.shooterId) return;
           
           const player = playersRef.current[id];
           const dist = bullet.mesh.position.distanceTo(player.mesh.position);
           
-          if (dist < 25) {
+          if (dist < 40) {
             bullet.life = 0;
-            socket.emit('bulletHit', { targetId: id, type: 'player', damage: 10 });
+            const currentDamage = 10 + (level - 1) * 5;
+            socket.emit('bulletHit', { targetId: id, type: 'player', damage: currentDamage, shooterId: bullet.shooterId });
           }
         });
 
@@ -357,9 +388,10 @@ const App = () => {
         Object.keys(obstaclesRef.current).forEach((id) => {
           const obs = obstaclesRef.current[id];
           const dist = bullet.mesh.position.distanceTo(obs.mesh.position);
-          if (dist < 35) {
+          if (dist < 40) {
             bullet.life = 0;
-            socket.emit('bulletHit', { targetId: id, type: 'obstacle', damage: 10 });
+            const currentDamage = 10 + (level - 1) * 5;
+            socket.emit('bulletHit', { targetId: id, type: 'obstacle', damage: currentDamage, shooterId: bullet.shooterId });
           }
         });
 
@@ -417,6 +449,7 @@ const App = () => {
 
   const handleJoystickStart = (e, type) => {
     e.preventDefault();
+    e.stopPropagation();
     const touch = e.changedTouches[0];
     const data = { 
       active: true, 
@@ -426,10 +459,13 @@ const App = () => {
       startY: touch.clientY,
       touchId: touch.identifier 
     };
+    
     if (type === 'move') {
-      setMoveJoystick(data);
+      moveJoystickRef.current = data;
+      setMoveJoystick({ active: true, x: 0, y: 0 });
     } else {
-      setFireJoystick(data);
+      fireJoystickRef.current = data;
+      setFireJoystick({ active: true, x: 0, y: 0 });
       // Single tap to fire once immediately
       const now = Date.now();
       if (now - lastFireTime.current >= 300) {
@@ -440,43 +476,48 @@ const App = () => {
   };
 
   const handleJoystickMove = (e) => {
-    e.preventDefault();
-    // Check both joysticks
-    [ { state: moveJoystick, setter: setMoveJoystick }, 
-      { state: fireJoystick, setter: setFireJoystick }
-    ].forEach(({ state, setter }) => {
-      if (!state.active) return;
+    // Check all touches
+    for (let i = 0; i < e.touches.length; i++) {
+      const touch = e.touches[i];
       
-      let touch = null;
-      for (let i = 0; i < e.touches.length; i++) {
-        if (e.touches[i].identifier === state.touchId) {
-          touch = e.touches[i];
-          break;
-        }
+      // Update move joystick
+      if (moveJoystickRef.current.active && touch.identifier === moveJoystickRef.current.touchId) {
+        const dx = touch.clientX - moveJoystickRef.current.startX;
+        const dy = touch.clientY - moveJoystickRef.current.startY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const maxDist = 50;
+        const limitedX = dist > 0 ? (dx / dist) * Math.min(dist, maxDist) : 0;
+        const limitedY = dist > 0 ? (dy / dist) * Math.min(dist, maxDist) : 0;
+        moveJoystickRef.current.x = limitedX;
+        moveJoystickRef.current.y = limitedY;
+        setMoveJoystick({ active: true, x: limitedX, y: limitedY });
       }
       
-      if (!touch) return;
-
-      const dx = touch.clientX - state.startX;
-      const dy = touch.clientY - state.startY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const maxDist = 50;
-      
-      const limitedX = dist > 0 ? (dx / dist) * Math.min(dist, maxDist) : 0;
-      const limitedY = dist > 0 ? (dy / dist) * Math.min(dist, maxDist) : 0;
-      setter(prev => ({ ...prev, x: limitedX, y: limitedY }));
-    });
+      // Update fire joystick
+      if (fireJoystickRef.current.active && touch.identifier === fireJoystickRef.current.touchId) {
+        const dx = touch.clientX - fireJoystickRef.current.startX;
+        const dy = touch.clientY - fireJoystickRef.current.startY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const maxDist = 50;
+        const limitedX = dist > 0 ? (dx / dist) * Math.min(dist, maxDist) : 0;
+        const limitedY = dist > 0 ? (dy / dist) * Math.min(dist, maxDist) : 0;
+        fireJoystickRef.current.x = limitedX;
+        fireJoystickRef.current.y = limitedY;
+        setFireJoystick({ active: true, x: limitedX, y: limitedY });
+      }
+    }
   };
 
   const handleJoystickEnd = (e) => {
-    e.preventDefault();
     for (let i = 0; i < e.changedTouches.length; i++) {
       const tid = e.changedTouches[i].identifier;
-      if (moveJoystick.touchId === tid) {
-        setMoveJoystick({ active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null });
+      if (moveJoystickRef.current.touchId === tid) {
+        moveJoystickRef.current = { active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null };
+        setMoveJoystick({ active: false, x: 0, y: 0 });
       }
-      if (fireJoystick.touchId === tid) {
-        setFireJoystick({ active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null });
+      if (fireJoystickRef.current.touchId === tid) {
+        fireJoystickRef.current = { active: false, x: 0, y: 0, startX: 0, startY: 0, touchId: null };
+        setFireJoystick({ active: false, x: 0, y: 0 });
       }
     }
   };
@@ -490,29 +531,71 @@ const App = () => {
     >
       <div ref={mountRef} style={{ width: '100vw', height: '100vh' }} />
       
-      {/* UI Overlay */}
+      {/* Health Bar */}
       <div style={{
         position: 'absolute',
-        top: 20,
-        left: 20,
-        color: 'white',
-        fontFamily: 'Arial, sans-serif',
-        pointerEvents: 'none',
-        background: 'rgba(0,0,0,0.5)',
-        padding: '10px',
-        borderRadius: '5px'
+        top: '20px',
+        left: '20px',
+        width: '200px',
+        height: '20px',
+        backgroundColor: '#333',
+        borderRadius: '10px',
+        border: '2px solid #fff',
+        pointerEvents: 'none'
       }}>
-        <h2 style={{ margin: '0 0 5px 0' }}>Tanki.io</h2>
-        <div style={{ width: '200px', height: '20px', background: '#333', borderRadius: '10px', overflow: 'hidden' }}>
-          <div style={{ width: `${health}%`, height: '100%', background: '#ff3333', transition: 'width 0.2s' }} />
+        <div style={{
+          width: `${health}%`,
+          height: '100%',
+          backgroundColor: '#ff4444',
+          borderRadius: '8px',
+          transition: 'width 0.3s ease'
+        }} />
+        <div style={{
+          position: 'absolute',
+          top: '0',
+          left: '0',
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          color: '#fff',
+          fontSize: '12px',
+          fontWeight: 'bold',
+          textShadow: '1px 1px 2px #000'
+        }}>
+          HP: {Math.round(health)}
         </div>
-        <p style={{ margin: '5px 0' }}>Здоровье: {health}%</p>
-        {!isMobile && (
-          <div style={{ fontSize: '12px', opacity: 0.8 }}>
-            <p>Управление: WASD</p>
-            <p>Стрельба: ЛКМ</p>
-          </div>
-        )}
+      </div>
+
+      {/* Level and XP */}
+      <div style={{
+        position: 'absolute',
+        top: '50px',
+        left: '20px',
+        color: '#fff',
+        fontFamily: 'Arial, sans-serif',
+        textShadow: '2px 2px 4px #000',
+        pointerEvents: 'none'
+      }}>
+        <div style={{ fontSize: '24px', fontWeight: 'bold' }}>LVL {level}</div>
+        <div style={{
+          width: '150px',
+          height: '10px',
+          backgroundColor: '#333',
+          borderRadius: '5px',
+          marginTop: '5px',
+          border: '1px solid #fff'
+        }}>
+          <div style={{
+            width: `${(xp / (level * 50)) * 100}%`,
+            height: '100%',
+            backgroundColor: '#44ff44',
+            borderRadius: '4px',
+            transition: 'width 0.3s ease'
+          }} />
+        </div>
+        <div style={{ fontSize: '10px', marginTop: '2px' }}>XP: {xp} / {level * 50}</div>
       </div>
 
       {/* Mobile Controls */}
