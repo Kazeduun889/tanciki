@@ -305,11 +305,14 @@ const App = () => {
           const targetAngle = Math.atan2(-fireJoystick.y, fireJoystick.x);
           localPlayer.turret.rotation.z = targetAngle - localPlayer.mesh.rotation.z;
           
-          // Auto fire while aiming with fire joystick
-          const now = Date.now();
-          if (now - lastFireTime.current >= 300) {
-            handleFire();
-            lastFireTime.current = now;
+          // Auto fire only if joystick is tilted enough
+          const dist = Math.sqrt(fireJoystick.x * fireJoystick.x + fireJoystick.y * fireJoystick.y);
+          if (dist > 20) {
+            const now = Date.now();
+            if (now - lastFireTime.current >= 300) {
+              handleFire();
+              lastFireTime.current = now;
+            }
           }
         } else if (moveJoystick.active) {
           // Turret follows movement if not firing
@@ -423,11 +426,21 @@ const App = () => {
       startY: touch.clientY,
       touchId: touch.identifier 
     };
-    if (type === 'move') setMoveJoystick(data);
-    else setFireJoystick(data);
+    if (type === 'move') {
+      setMoveJoystick(data);
+    } else {
+      setFireJoystick(data);
+      // Single tap to fire once immediately
+      const now = Date.now();
+      if (now - lastFireTime.current >= 300) {
+        handleFire();
+        lastFireTime.current = now;
+      }
+    }
   };
 
   const handleJoystickMove = (e) => {
+    e.preventDefault();
     // Check both joysticks
     [ { state: moveJoystick, setter: setMoveJoystick }, 
       { state: fireJoystick, setter: setFireJoystick }
@@ -449,15 +462,14 @@ const App = () => {
       const dist = Math.sqrt(dx * dx + dy * dy);
       const maxDist = 50;
       
-      if (dist > 0) {
-        const limitedX = (dx / dist) * Math.min(dist, maxDist);
-        const limitedY = (dy / dist) * Math.min(dist, maxDist);
-        setter(prev => ({ ...prev, x: limitedX, y: limitedY }));
-      }
+      const limitedX = dist > 0 ? (dx / dist) * Math.min(dist, maxDist) : 0;
+      const limitedY = dist > 0 ? (dy / dist) * Math.min(dist, maxDist) : 0;
+      setter(prev => ({ ...prev, x: limitedX, y: limitedY }));
     });
   };
 
   const handleJoystickEnd = (e) => {
+    e.preventDefault();
     for (let i = 0; i < e.changedTouches.length; i++) {
       const tid = e.changedTouches[i].identifier;
       if (moveJoystick.touchId === tid) {
